@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ブロック崩し試作</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; }
+  canvas { max-width: 100vmin; max-height: 100vmin; cursor: none; background: #444; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="800"></canvas>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = 800, H = 800, CELL = 54, FLOOR = 700;
+
+// ブロック配置（画像を参考にした形）。数字: 色キー、小文字は耐久2
+const COLORS = {
+  R: ['#ff2a2a', '#b00000'], B: ['#b0764a', '#6d4524'], U: ['#2a5cff', '#0f2a8a'],
+  T: ['#1f8f86', '#0b4a45'], G: ['#22b422', '#0b5a0b'], D: ['#0f6a2a', '#053a14']
+};
+const LAYOUT = [
+  { x: 20, y: 122, rows: ['.R.', 'RRR', 'RRR', 'BBB', 'TTT', 'TTT', 'TTT'] },
+  { x: 225, y: 122, rows: ['.B.', 'BBB', '.B.', '.U.', 'UUU', 'UUU', '.U.'] },
+  { x: 623, y: 122, rows: ['...', 'DDD', 'DDD', '.G.', 'GGG', 'GGG', 'GGG', '.G.'] }
+];
+
+let blocks, particles, ball, paddle, life, score, state, mouseX = W / 2;
+
+function buildBlocks() {
+  blocks = [];
+  for (const g of LAYOUT) {
+    g.rows.forEach((row, r) => [...row].forEach((ch, c) => {
+      if (ch === '.') return;
+      const hard = (ch === 'D' || ch === 'T');
+      blocks.push({ x: g.x + c * CELL, y: g.y + r * CELL, w: CELL - 2, h: CELL - 2,
+                    key: ch, hp: hard ? 2 : 1, flash: 0 });
+    }));
+  }
+}
+
+function resetBall() {
+  ball = { x: paddle.x, y: paddle.y - 40, r: 17, vx: 0, vy: 0, speed: 7 };
+  state = 'ready';
+}
+
+function newGame() {
+  paddle = { x: W / 2, y: 685, w: 280, h: 14 };
+  particles = []; life = 3; score = 0;
+  buildBlocks(); resetBall();
+}
+
+function launch() {
+  const a = (-90 + (Math.random() * 40 - 20)) * Math.PI / 180;
+  ball.vx = Math.cos(a) * ball.speed; ball.vy = Math.sin(a) * ball.speed;
+  state = 'play';
+}
+
+cv.addEventListener('mousemove', e => {
+  const rect = cv.getBoundingClientRect();
+  mouseX = (e.clientX - rect.left) * W / rect.width;
+});
+cv.addEventListener('mousedown', () => {
+  if (state === 'ready') launch();
+  else if (state === 'over' || state === 'clear') newGame();
+});
+
+function burst(b) {
+  const col = COLORS[b.key][0];
+  for (let i = 0; i < 9; i++) {
+    const white = i % 3 !== 0;
+    particles.push({
+      x: b.x + b.w / 2, y: b.y + b.h / 2,
+      vx: (Math.random() - .5) * 9, vy: (Math.random() - .8) * 8,
+      rot: Math.random() * 6, vr: (Math.random() - .5) * .4,
+      s: 8 + Math.random() * 14, life: 50 + Math.random() * 20,
+      color: white ? '#e8e4d4' : col
+    });
+  }
+}
+
+function collideBlocks() {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    const cx = Math.max(b.x, Math.min(ball.x, b.x + b.w));
+    const cy = Math.max(b.y, Math.min(ball.y, b.y + b.h));
+    const dx = ball.x - cx, dy = ball.y - cy;
+    if (dx * dx + dy * dy > ball.r * ball.r) continue;
+    // 反射方向の判定
+    if (Math.abs(dx) > Math.abs(dy)) { ball.vx = Math.abs(ball.vx) * Math.sign(dx || ball.vx * -1); ball.x += Math.sign(dx) * 2; }
+    else { ball.vy = Math.abs(ball.vy) * Math.sign(dy || ball.vy * -1); ball.y += Math.sign(dy) * 2; }
+    b.hp--; b.flash = 6;
+    if (b.hp <= 0) { score += 100; burst(b); blocks.splice(i, 1); }
+    else score += 20;
+    return; // 1ステップ1ブロック
+  }
+}
+
+function update() {
+  paddle.x += (Math.max(paddle.w / 2, Math.min(W - paddle.w / 2, mouseX)) - paddle.x) * 0.35;
+  for (const p of particles) { p.x += p.vx; p.y += p.vy; p.vy += .35; p.rot += p.vr; p.life--; }
+  particles = particles.filter(p => p.life > 0);
+  blocks.forEach(b => { if (b.flash > 0) b.flash--; });
+
+  if (state === 'ready') { ball.x = paddle.x; ball.y = paddle.y - 40; return; }
+  if (state !== 'play') return;
+
+  const steps = 4;
+  for (let s = 0; s < steps; s++) {
+    ball.x += ball.vx / steps; ball.y += ball.vy / steps;
+    if (ball.x < ball.r) { ball.x = ball.r; ball.vx = Math.abs(ball.vx); }
+    if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
+    if (ball.y < ball.r) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
+    // パドル
+    if (ball.vy > 0 && ball.y + ball.r >= paddle.y && ball.y + ball.r <= paddle.y + paddle.h + 14 &&
+        Math.abs(ball.x - paddle.x) <= paddle.w / 2 + ball.r) {
+      const t = (ball.x - paddle.x) / (paddle.w / 2); // -1..1
+      const a = (-90 + t * 60) * Math.PI / 180;
+      ball.speed = Math.min(ball.speed + 0.1, 11);
+      ball.vx = Math.cos(a) * ball.speed; ball.vy = Math.sin(a) * ball.speed;
+      ball.y = paddle.y - ball.r;
+    }
+    collideBlocks();
+  }
+  if (blocks.length === 0) { state = 'clear'; return; }
+  if (ball.y - ball.r > H) {
+    life--;
+    if (life <= 0) state = 'over'; else { ball.speed = 7; resetBall(); }
+  }
+}
+
+function drawBlock(b) {
+  const [c1, c2] = COLORS[b.key];
+  const g = ctx.createLinearGradient(b.x, b.y, b.x + b.w, b.y + b.h);
+  g.addColorStop(0, c1); g.addColorStop(1, c2);
+  ctx.fillStyle = g; ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2;
+  ctx.strokeRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2);
+  ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(b.x + 4, b.y + 4, b.w - 8, 8);
+  if (b.hp > 1) { ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.strokeRect(b.x + 8, b.y + 8, b.w - 16, b.h - 16); }
+  if (b.flash) { ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(b.x, b.y, b.w, b.h); }
+}
+
+function drawBall(x, y, r, alpha) {
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x - r * .35, y - r * .4, r * .1, x, y, r);
+  g.addColorStop(0, '#ff8a8a'); g.addColorStop(.35, '#e01010'); g.addColorStop(1, '#6a0000');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.beginPath(); ctx.ellipse(x - r * .35, y - r * .4, r * .28, r * .2, -.6, 0, 7); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawPaddle(alpha) {
+  ctx.globalAlpha = alpha; ctx.fillStyle = '#000';
+  const x = paddle.x, y = paddle.y, w = paddle.w / 2;
+  ctx.beginPath();
+  ctx.moveTo(x - w, y + paddle.h); ctx.lineTo(x - w + 12, y + 4); ctx.lineTo(x - w * .35, y + 2);
+  ctx.lineTo(x - w * .1, y - 18); ctx.lineTo(x + w * .15, y + 2); ctx.lineTo(x + w - 10, y + 2);
+  ctx.lineTo(x + w, y + paddle.h); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  // 背景
+  const bg = ctx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, 600);
+  bg.addColorStop(0, '#6a6a6a'); bg.addColorStop(1, '#2a2a2a');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // 薄いグリッド
+  ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
+  for (let x = 20; x < W; x += CELL) { ctx.beginPath(); ctx.moveTo(x, 122); ctx.lineTo(x, 560); ctx.stroke(); }
+  for (let y = 122; y < 560; y += CELL) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  blocks.forEach(drawBlock);
+
+  // 反射（床より下）
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, paddle.y + 20, W, H); ctx.clip();
+  const my = paddle.y + paddle.h + 4;
+  ctx.translate(0, my * 2); ctx.scale(1, -1);
+  const ry = paddle.y; paddle.y = ry; drawPaddle(.35);
+  drawBall(ball.x, ball.y, ball.r, .35);
+  ctx.restore();
+
+  drawPaddle(1);
+  drawBall(ball.x, ball.y, ball.r, 1);
+
+  // 破片
+  for (const p of particles) {
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+    ctx.globalAlpha = Math.min(1, p.life / 20);
+    ctx.fillStyle = p.color; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s);
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.strokeRect(-p.s / 2, -p.s / 2, p.s, p.s);
+    ctx.restore();
+  }
+
+  // HUD
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'right'; ctx.font = 'bold 44px "Courier New", monospace';
+  ctx.fillText('LIFE ' + life + '/3', W - 10, 52);
+  ctx.fillText(String(score).padStart(4, '0'), W - 10, 100);
+
+  ctx.textAlign = 'center'; ctx.font = 'bold 40px sans-serif';
+  if (state === 'ready') { ctx.font = 'bold 28px sans-serif'; ctx.fillText('クリックで発射', W / 2, 600); }
+  if (state === 'over') { ctx.fillText('GAME OVER', W / 2, 400); ctx.font = '24px sans-serif'; ctx.fillText('クリックでリスタート', W / 2, 445); }
+  if (state === 'clear') { ctx.fillText('CLEAR!', W / 2, 400); ctx.font = '24px sans-serif'; ctx.fillText('クリックでもう一度', W / 2, 445); }
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+newGame(); loop();
+</script>
+</body>
+</html>
